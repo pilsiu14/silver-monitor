@@ -53,7 +53,7 @@ curl -H "Authorization: Bearer YOUR_CRON_SECRET" \
 ```
 
 ## Schema bazy danych
-
+V2
 Patrz: poprzednio uruchomiony SQL w Supabase (5 tabel: comex_inventory, prices, cot_reports, alerts_log, alert_config).
 
 ## License
