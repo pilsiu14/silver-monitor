@@ -19,6 +19,7 @@ import { StatusBar } from '@/components/StatusBar';
 import { ManualUpdate } from '@/components/ManualUpdate';
 
 // Force dynamic rendering - dane mają być świeże przy każdym wejściu
+export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
