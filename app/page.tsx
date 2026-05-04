@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function HomePage() {
-  // Najnowszy snapshot COMEX
+  // Najnowszy snapshot COMEX (może być brak)
   const { data: latestComex } = await supabase
     .from('comex_inventory')
     .select('*')
@@ -60,23 +60,26 @@ export default async function HomePage() {
     }))
     .reverse();
 
+  // Wystarczy mieć ceny żeby pokazać dashboard
+  const hasAnyData = !!latestPrice;
+  const hasComex = !!latestComex;
+
   // Obliczenia metryk
-  const hasData = latestComex && latestPrice;
-  const coverage = hasData ? calculateCoverageRatio(latestComex) : 0;
-  const leverage = hasData ? calculatePaperLeverage(latestComex) : 0;
-  const premium = hasData
+  const coverage = hasComex ? calculateCoverageRatio(latestComex) : 0;
+  const leverage = hasComex ? calculatePaperLeverage(latestComex) : 0;
+  const premium = latestPrice
     ? calculateShanghaiPremium({
         spot_western: latestPrice.spot_western ?? 0,
         sge_shanghai: latestPrice.sge_shanghai ?? undefined,
       })
     : { absolute: 0, percentage: 0 };
-  const gsr = hasData
+  const gsr = latestPrice
     ? calculateGoldSilverRatio({
         spot_western: latestPrice.spot_western ?? 0,
         gold_price: latestPrice.gold_price ?? undefined,
       })
     : 0;
-  const squeezeScore = hasData
+  const squeezeScore = hasComex && latestPrice
     ? calculateSqueezeScore(latestComex, {
         spot_western: latestPrice.spot_western ?? 0,
         sge_shanghai: latestPrice.sge_shanghai ?? undefined,
@@ -87,8 +90,10 @@ export default async function HomePage() {
   const coverageStatus = getStatusForCoverage(coverage);
   const squeezeStatus = getStatusForSqueezeScore(squeezeScore);
 
-  const lastUpdate = latestComex?.recorded_at
-    ? new Date(latestComex.recorded_at).toLocaleString('pl-PL')
+  // Pokaż czas najświeższej aktualizacji - z prices jeśli brak comex
+  const lastUpdateRaw = latestComex?.recorded_at ?? latestPrice?.recorded_at;
+  const lastUpdate = lastUpdateRaw
+    ? new Date(lastUpdateRaw).toLocaleString('pl-PL')
     : 'brak danych';
 
   return (
@@ -100,7 +105,7 @@ export default async function HomePage() {
             Silver Squeeze Monitor
           </h1>
           <p className="font-mono text-xs text-[#8a8a82] tracking-widest uppercase mt-2">
-            COMEX × Shanghai · live · auto-update co 2h
+            COMEX × Shanghai · live · auto-update raz dziennie o 9:00
           </p>
         </div>
         <div className="font-mono text-xs text-[#8a8a82] text-right">
@@ -108,8 +113,8 @@ export default async function HomePage() {
         </div>
       </header>
 
-      {/* Status bar */}
-      {hasData && (
+      {/* Status bar - tylko jeśli mamy COMEX */}
+      {hasComex && (
         <StatusBar
           coverageStatus={coverageStatus}
           squeezeScore={squeezeScore}
@@ -118,8 +123,8 @@ export default async function HomePage() {
         />
       )}
 
-      {/* Metrics grid */}
-      {!hasData ? (
+      {/* Brak danych w ogóle */}
+      {!hasAnyData ? (
         <div className="bg-card border border-white/10 rounded-md p-12 text-center">
           <p className="text-[#8a8a82] mb-4">
             Brak danych. Cron job pobierze pierwsze wartości w ciągu najbliższej godziny.
@@ -130,18 +135,28 @@ export default async function HomePage() {
         </div>
       ) : (
         <>
+          {/* Komunikat gdy częściowe dane */}
+          {!hasComex && (
+            <div className="bg-amber-950/30 border border-amber-500/20 rounded-md p-4 mb-8">
+              <p className="text-amber-200 text-sm">
+                ⚠ Mamy aktualne ceny, ale dane COMEX (registered/eligible/OI) jeszcze się nie pobrały.
+                Coverage ratio i leverage będą widoczne gdy CME scraping się uda lub po ręcznym wpisaniu.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
             <MetricCard
               label="Coverage"
-              value={`${coverage.toFixed(2)}%`}
-              tone={coverageStatus.color}
-              note={coverageStatus.label}
+              value={hasComex ? `${coverage.toFixed(2)}%` : '—'}
+              tone={hasComex ? coverageStatus.color : 'neutral'}
+              note={hasComex ? coverageStatus.label : 'brak COMEX'}
             />
             <MetricCard
               label="Leverage"
-              value={`${leverage.toFixed(2)}×`}
-              tone={leverage > 8 ? 'red' : leverage > 6 ? 'amber' : 'green'}
-              note="papier:metal"
+              value={hasComex ? `${leverage.toFixed(2)}×` : '—'}
+              tone={hasComex ? (leverage > 8 ? 'red' : leverage > 6 ? 'amber' : 'green') : 'neutral'}
+              note={hasComex ? 'papier:metal' : 'brak COMEX'}
             />
             <MetricCard
               label="Spot $"
@@ -165,60 +180,64 @@ export default async function HomePage() {
               note={
                 premium.percentage
                   ? `${premium.percentage.toFixed(1)}% nad spot`
-                  : ''
+                  : 'wpisz ręcznie poniżej'
               }
             />
           </div>
 
-          {/* Squeeze score - duża karta */}
-          <div className="bg-card border border-white/10 rounded-lg p-6 mb-8">
-            <div className="flex justify-between items-baseline mb-3">
-              <h3 className="font-serif text-lg">Squeeze Risk Score</h3>
-              <span
-                className="font-mono text-xs px-2 py-1 rounded"
-                style={{
-                  background:
-                    squeezeStatus.color === 'red'
-                      ? '#FCEBEB'
-                      : squeezeStatus.color === 'amber'
-                      ? '#FAEEDA'
-                      : '#E1F5EE',
-                  color:
-                    squeezeStatus.color === 'red'
-                      ? '#791F1F'
-                      : squeezeStatus.color === 'amber'
-                      ? '#633806'
-                      : '#04342C',
-                }}
-              >
-                {squeezeStatus.label}
-              </span>
+          {/* Squeeze score - duża karta - tylko jeśli mamy COMEX */}
+          {hasComex && (
+            <div className="bg-card border border-white/10 rounded-lg p-6 mb-8">
+              <div className="flex justify-between items-baseline mb-3">
+                <h3 className="font-serif text-lg">Squeeze Risk Score</h3>
+                <span
+                  className="font-mono text-xs px-2 py-1 rounded"
+                  style={{
+                    background:
+                      squeezeStatus.color === 'red'
+                        ? '#FCEBEB'
+                        : squeezeStatus.color === 'amber'
+                        ? '#FAEEDA'
+                        : '#E1F5EE',
+                    color:
+                      squeezeStatus.color === 'red'
+                        ? '#791F1F'
+                        : squeezeStatus.color === 'amber'
+                        ? '#633806'
+                        : '#04342C',
+                  }}
+                >
+                  {squeezeStatus.label}
+                </span>
+              </div>
+              <div className="font-serif text-6xl font-medium">
+                {squeezeScore}
+                <span className="text-[#555550] text-3xl">/100</span>
+              </div>
+              <div className="mt-4 h-2 bg-white/5 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: `${squeezeScore}%`,
+                    background:
+                      squeezeScore >= 70
+                        ? '#E24B4A'
+                        : squeezeScore >= 40
+                        ? '#EF9F27'
+                        : '#5DCAA5',
+                  }}
+                />
+              </div>
             </div>
-            <div className="font-serif text-6xl font-medium">
-              {squeezeScore}
-              <span className="text-[#555550] text-3xl">/100</span>
-            </div>
-            <div className="mt-4 h-2 bg-white/5 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all"
-                style={{
-                  width: `${squeezeScore}%`,
-                  background:
-                    squeezeScore >= 70
-                      ? '#E24B4A'
-                      : squeezeScore >= 40
-                      ? '#EF9F27'
-                      : '#5DCAA5',
-                }}
-              />
-            </div>
-          </div>
+          )}
 
-          {/* Wykres */}
-          <div className="bg-card border border-white/10 rounded-lg p-6 mb-8">
-            <h3 className="font-serif text-lg mb-4">Coverage ratio · 30 dni</h3>
-            <CoverageChart data={historyData} />
-          </div>
+          {/* Wykres - tylko jeśli mamy historię COMEX */}
+          {hasComex && historyData.length > 0 && (
+            <div className="bg-card border border-white/10 rounded-lg p-6 mb-8">
+              <h3 className="font-serif text-lg mb-4">Coverage ratio · 30 dni</h3>
+              <CoverageChart data={historyData} />
+            </div>
+          )}
 
           {/* Manual update */}
           <ManualUpdate />
@@ -229,7 +248,7 @@ export default async function HomePage() {
         Silver Squeeze Monitor v1.0 · źródła: CME Group, gold-api.com, Investing.com (SHFE),
         Yahoo Finance.
         <br />
-        Dane aktualizowane automatycznie co 2 godziny przez Vercel Cron. To NIE jest porada inwestycyjna.
+        Dane aktualizowane automatycznie raz dziennie o 9:00 przez Vercel Cron. To NIE jest porada inwestycyjna.
       </footer>
     </div>
   );
